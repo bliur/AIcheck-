@@ -1,4 +1,4 @@
-pluginManagement {
+﻿pluginManagement {
     repositories {
         google {
             content {
@@ -16,9 +16,10 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        maven { url = uri("https://api.xposed.info/") }
+        maven { url = uri("https://api.lsposed.org/") }
     }
 }
 
 rootProject.name = "aicheat"
 include(":app")
- 
