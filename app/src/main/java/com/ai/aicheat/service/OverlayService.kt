@@ -1,4 +1,4 @@
-package com.ai.aicheat.service
+﻿package com.ai.aicheat.service
 
 import android.app.Service
 import android.content.Context
@@ -8,231 +8,173 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import android.view.Gravity
-import android.view.LayoutInflater
 import android.view.View
 import android.view.WindowManager
 import android.widget.TextView
-import android.text.method.LinkMovementMethod
-import androidx.core.content.ContextCompat
 import io.noties.markwon.Markwon
 import io.noties.markwon.ext.latex.JLatexMathPlugin
 import io.noties.markwon.html.HtmlPlugin
 import io.noties.markwon.inlineparser.MarkwonInlineParserPlugin
+import com.ai.aicheat.util.ConfigManager
 
-/**
- * 隐蔽悬浮窗服务
- * 特点：
- * 1. 极高透明度，难以察觉
- * 2. FLAG_SECURE防止被截图
- * 3. 不可触摸，不影响底层操作
- */
 class OverlayService : Service() {
-    
+
     companion object {
         private const val TAG = "OverlayService"
-        
+
         const val ACTION_SHOW_TEXT = "com.ai.aicheat.SHOW_TEXT"
         const val ACTION_HIDE_TEXT = "com.ai.aicheat.HIDE_TEXT"
-        const val ACTION_CLEAR_TEXT = "com.ai.aicheat.CLEAR_TEXT"
+        const val ACTION_TOGGLE_TEXT = "com.ai.aicheat.TOGGLE_TEXT"
+        const val ACTION_SET_ALPHA = "com.ai.aicheat.SET_ALPHA"
+
         const val EXTRA_TEXT = "extra_text"
-        
+        const val EXTRA_ALPHA = "extra_alpha"
+
         private var instance: OverlayService? = null
-        
+        private var isHiddenByUser = false
+        private var lastAnswerText = ""
+
         fun showText(context: Context, text: String) {
-            val intent = Intent(context, OverlayService::class.java).apply {
+            isHiddenByUser = false
+            lastAnswerText = text
+            context.startService(Intent(context, OverlayService::class.java).apply {
                 action = ACTION_SHOW_TEXT
                 putExtra(EXTRA_TEXT, text)
-            }
-            context.startService(intent)
+            })
         }
-        
+
         fun hideText(context: Context) {
-            val intent = Intent(context, OverlayService::class.java).apply {
+            isHiddenByUser = true
+            context.startService(Intent(context, OverlayService::class.java).apply {
                 action = ACTION_HIDE_TEXT
-            }
-            context.startService(intent)
+            })
         }
-        
-        fun clearText(context: Context) {
-            val intent = Intent(context, OverlayService::class.java).apply {
-                action = ACTION_CLEAR_TEXT
+
+        /** 切换显示/隐藏 (音量上键使用) */
+        fun toggleText(context: Context) {
+            if (isHiddenByUser && lastAnswerText.isNotEmpty()) {
+                // 当前是隐藏状态 → 重新显示
+                isHiddenByUser = false
+                context.startService(Intent(context, OverlayService::class.java).apply {
+                    action = ACTION_SHOW_TEXT
+                    putExtra(EXTRA_TEXT, lastAnswerText)
+                })
+            } else if (!isHiddenByUser && lastAnswerText.isNotEmpty()) {
+                // 当前是显示状态 → 隐藏
+                hideText(context)
             }
-            context.startService(intent)
         }
+
+        fun setAlpha(context: Context, alpha: Float) {
+            context.startService(Intent(context, OverlayService::class.java).apply {
+                action = ACTION_SET_ALPHA
+                putExtra(EXTRA_ALPHA, alpha)
+            })
+        }
+
+        fun hasAnswer(): Boolean = lastAnswerText.isNotEmpty()
     }
-    
+
     private var windowManager: WindowManager? = null
     private var overlayView: View? = null
     private var textView: TextView? = null
-    private var isTextVisible = true
     private var currentText = ""
-    
-    // Markwon实例 - 用于渲染Markdown和LaTeX数学公式
     private lateinit var markwon: Markwon
-    
+
     override fun onCreate() {
         super.onCreate()
         instance = this
-        createOverlayView()  // 先创建 TextView
-        initMarkwon()        // 再初始化 Markwon
+        createOverlayView()
+        initMarkwon()
+        setOverlayAlpha(ConfigManager.overlayAlpha)
         Log.d(TAG, "OverlayService created")
     }
-    
-    /**
-     * 初始化Markwon实例
-     * 配置LaTeX数学公式支持和HTML解析
-     */
+
     private fun initMarkwon() {
         val textSize = textView?.textSize ?: 36f
         markwon = Markwon.builder(this)
             .usePlugin(HtmlPlugin.create())
             .usePlugin(MarkwonInlineParserPlugin.create())
             .usePlugin(JLatexMathPlugin.create(textSize) { builder ->
-                // 配置LaTeX渲染选项
-                builder.inlinesEnabled(true)  // 启用行内公式 $...$
-                builder.blocksEnabled(true)   // 启用块级公式 $$...$$
+                builder.inlinesEnabled(true)
+                builder.blocksEnabled(true)
             })
             .build()
-        Log.d(TAG, "Markwon initialized with LaTeX support, textSize=$textSize")
     }
-    
+
     override fun onBind(intent: Intent?): IBinder? = null
-    
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_SHOW_TEXT -> {
                 val text = intent.getStringExtra(EXTRA_TEXT) ?: ""
-                showOverlayText(text)
+                currentText = text
+                textView?.post {
+                    try { markwon.setMarkdown(textView!!, text) } catch (_: Exception) { textView?.text = text }
+                    overlayView?.visibility = View.VISIBLE
+                }
             }
             ACTION_HIDE_TEXT -> {
-                toggleTextVisibility()
+                textView?.post { overlayView?.visibility = View.GONE }
             }
-            ACTION_CLEAR_TEXT -> {
-                clearOverlayText()
+            ACTION_TOGGLE_TEXT -> {
+                // 直接在 companion object 的 toggleText 中处理
+            }
+            ACTION_SET_ALPHA -> {
+                val alpha = intent.getFloatExtra(EXTRA_ALPHA, ConfigManager.overlayAlpha)
+                setOverlayAlpha(alpha)
             }
         }
         return START_STICKY
     }
-    
+
     private fun createOverlayView() {
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        
-        // 创建TextView用于显示文本
+
         textView = TextView(this).apply {
-            setTextColor(0x99FFFFFF.toInt())  // 半透明白色
+            setTextColor(0x99FFFFFF.toInt())
             textSize = 12f
             setPadding(16, 8, 16, 8)
-            setBackgroundColor(0x33300000)  // 非常透明的黑色背景
+            setBackgroundColor(0x33300000)
             gravity = Gravity.START
-            maxLines = 10
+            maxLines = 15
         }
-        
         overlayView = textView
-        
-        // 窗口参数 - 极其隐蔽
+
         val params = WindowManager.LayoutParams().apply {
-            // 窗口类型
             type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             } else {
-                @Suppress("DEPRECATION")
-                WindowManager.LayoutParams.TYPE_PHONE
+                @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
             }
-            
-            // 关键标志位
-            flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or  // 不获取焦点
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or   // 不可触摸
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or  // 可以在状态栏内
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or  // 无边界限制
-                    WindowManager.LayoutParams.FLAG_SECURE  // 关键：防止被截图！
-            
-            // 透明格式
+            flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                    WindowManager.LayoutParams.FLAG_SECURE
             format = PixelFormat.TRANSLUCENT
-            
-            // 尺寸
             width = WindowManager.LayoutParams.WRAP_CONTENT
             height = WindowManager.LayoutParams.WRAP_CONTENT
-            
-            // 位置 - 放在屏幕边缘，不显眼
             gravity = Gravity.TOP or Gravity.START
             x = 20
             y = 100
         }
-        
+
         try {
             windowManager?.addView(overlayView, params)
-            overlayView?.visibility = View.GONE  // 初始隐藏
-            Log.d(TAG, "Overlay view created with FLAG_SECURE")
+            overlayView?.visibility = View.GONE
         } catch (e: Exception) {
             Log.e(TAG, "Failed to create overlay", e)
         }
     }
-    
-    private fun showOverlayText(text: String) {
-        currentText = text
-        textView?.post {
-            // 使用Markwon的setMarkdown方法来正确渲染LaTeX公式图片
-            textView?.let { tv ->
-                markwon.setMarkdown(tv, text)
-            }
-            if (isTextVisible) {
-                overlayView?.visibility = View.VISIBLE
-            }
-        }
-        Log.d(TAG, "Showing text with Markdown/LaTeX rendering: ${text.take(50)}...")
-    }
-    
-    private fun toggleTextVisibility() {
-        isTextVisible = !isTextVisible
-        textView?.post {
-            overlayView?.visibility = if (isTextVisible && currentText.isNotEmpty()) {
-                View.VISIBLE
-            } else {
-                View.GONE
-            }
-        }
-        Log.d(TAG, "Text visibility toggled: $isTextVisible")
-    }
-    
-    private fun clearOverlayText() {
-        currentText = ""
-        textView?.post {
-            textView?.text = ""
-            overlayView?.visibility = View.GONE
-        }
-        Log.d(TAG, "Text cleared")
-    }
-    
-    /**
-     * 设置悬浮窗透明度
-     * @param alpha 0.0f(完全透明) - 1.0f(不透明)
-     */
+
     fun setOverlayAlpha(alpha: Float) {
-        textView?.post {
-            textView?.alpha = alpha
-        }
+        textView?.post { textView?.alpha = alpha }
     }
-    
-    /**
-     * 设置悬浮窗位置
-     */
-    fun setOverlayPosition(x: Int, y: Int) {
-        val params = overlayView?.layoutParams as? WindowManager.LayoutParams
-        params?.let {
-            it.x = x
-            it.y = y
-            windowManager?.updateViewLayout(overlayView, it)
-        }
-    }
-    
+
     override fun onDestroy() {
         super.onDestroy()
-        try {
-            windowManager?.removeView(overlayView)
-        } catch (e: Exception) {
-            Log.e(TAG, "Error removing overlay", e)
-        }
+        try { windowManager?.removeView(overlayView) } catch (_: Exception) {}
         instance = null
-        Log.d(TAG, "OverlayService destroyed")
     }
 }

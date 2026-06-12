@@ -1,4 +1,4 @@
-plugins {
+﻿plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
@@ -12,8 +12,8 @@ android {
         applicationId = "com.ai.aicheat"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -49,20 +49,24 @@ dependencies {
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
-    
+
     // 网络请求
     implementation(libs.okhttp)
     // 协程
     implementation(libs.kotlinx.coroutines.android)
     // Lifecycle Service
     implementation(libs.androidx.lifecycle.service)
-    
-    // Markwon - Markdown渲染库（支持LaTeX数学公式）
+
+    // Markwon
     implementation(libs.markwon.core)
     implementation(libs.markwon.ext.latex)
     implementation(libs.markwon.html)
     implementation(libs.markwon.inline.parser)
-    
+
+    // Xposed API (compileOnly, 不打包进APK)
+    compileOnly("de.robv.android.xposed:api:82")
+    compileOnly("de.robv.android.xposed:api:82:sources")
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
